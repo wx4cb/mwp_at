@@ -1,39 +1,107 @@
-#include <TinyGPS.h>
+#include <MegunoLink.h>
+#include <CommandHandler.h>
+#include <TCPCommandHandler.h>
+#include <ArduinoTimer.h>
+#include <CircularBuffer.h>
+#include <EEPROMStore.h>
+#include <Filter.h>
 
 #include <Wire.h>
 #include <HMC5883L.h>
 #include <Servo.h>
-#include <SoftwareSerial.h>
 
 
+// This is our I2C Compass
 HMC5883L compass;
 
 // This is our continuous rotation servo
 Servo servo;
+
+// Servo constants
 int NORTH = 0;
 int SERVO_STOP = 90;  // change this value to achieve minimum rotation!
-int SERVO_PAN = 9;
+int SERVO_PAN = 4;
+int SERVO_TILT = 5;
 
 // Pi for calculations - not the raspberry type
 const float Pi = 3.14159;
 
+// Current Target and Last Heading
 static int target;
 static int lasttarget;
+// Other Data
+float UAV_LAT = 0;
+float UAV_LONG = 0;
+float UAV_DISTANCE = 0;
+float UAV_ELEVATION = 0;
+float UAV_AZIMUTH = 0;
+float UAV_BEARING = 0;
+
+// Command Processor
+// Attach a new CmdMessenger object to the default Serial port
+CommandHandler<> SerialCommandHandler;
+
+// Commands we send from the PC and want to receive on the Arduino.
+// We must define a callback function in our Arduino program for each entry in the list below.
+void attachCommandCallbacks()
+{
+  Serial.println("Attaching Callbacks");
+  // Attach callback methods
+  // Setup the serial commands we can repond to
+  SerialCommandHandler.AddCommand(F("UAV"), OnUAV);
+
+  SerialCommandHandler.SetDefaultHandler(Cmd_Unknown);
+
+}
+
+// ------------------  C A L L B A C K S -----------------------
+void OnUAV(CommandParameter &Parameters)
+{
+    Serial.println("New Update: ");
+  // !UAV 50.9100974 -1.5351514 15.0 -8.0 137.795275591
+  // Retreive first parameter as float
+  UAV_LAT = atof(Parameters.NextParameter());
+    UAV_LONG = atof(Parameters.NextParameter());
+  UAV_DISTANCE = atof(Parameters.NextParameter());
+  UAV_AZIMUTH= Parameters.NextParameterAsInteger(UAV_AZIMUTH);
+  UAV_BEARING= Parameters.NextParameterAsInteger(UAV_BEARING);
+  Serial.print("Azimuths:");
+  Serial.println(UAV_AZIMUTH);
+  Serial.print("Bearing:");
+  Serial.println(UAV_BEARING);
+}
+
+void Cmd_Unknown()
+{
+  Serial.println(F("I don't understand"));
+}
 
 
+
+
+
+
+
+
+
+
+
+
+
+// Arduino Setup Function
 void setup(void) 
 {
   Serial.begin(115200);
-  Serial.println("MWPTools Antenna Tracker Remote - v1.0.1"); Serial.println("");
-  
+
  // Initialize HMC5883L
-  Serial.println("Initialize HMC5883L");
+  Serial.println("\nInitialize HMC5883L");
   while (!compass.begin())
   {
     Serial.println ( "HMC5883L not found, check connection!" ) ;
     delay(500);
   }
- 
+
+  Serial.println("Setting up HCM5883L");
   // Set the measuring range
   compass.setRange(HMC5883L_RANGE_1_3GA);
  
@@ -46,10 +114,14 @@ void setup(void)
   // The number of averaged samples
   compass.setSamples(HMC5883L_SAMPLES_4);
 
+  // Attach Servo
+  Serial.println("Connecting to servos");
   servo.attach(SERVO_PAN);  // attaches the servo on pin 9 to the servo object 
   servo.write(SERVO_STOP);  
   
   MoveServo(NORTH);
+
+  attachCommandCallbacks();
 }
 
 int GetHeading(void) {
@@ -101,34 +173,14 @@ void MoveServo(int t) {
   Serial.print(" Error: "); Serial.println(error);
 }
 
-
 String inString = "";    // string to hold input
 
 void loop(void) 
 {
- 
-// Read serial input:
-  while (Serial.available() > 0) {
-    int inChar = Serial.read();
-    if (isDigit(inChar)) {
-      // convert the incoming byte to a char and add it to the string:
-      inString += (char)inChar;
-    }
-    // if you get a newline, print the string, then the string's value:
-    if (inChar == '\n') {
-      lasttarget = target;
-      target = inString.toInt();
-      if (target >= 360) { target = 0; }
-      target = constrain(target, 0, 359);
-      
-      Serial.print("MAIN: last-target: "); Serial.print(lasttarget);
-      Serial.print(" - Target: "); Serial.println(target);
-      
-      inString = "";
-    }
-  }
+   // Process incoming serial data, and perform callbacks
+  SerialCommandHandler.Process();
+  
+  MoveServo(UAV_BEARING);
 
-  MoveServo(target);
-
-  delay(50);
+  delay(250);
 }

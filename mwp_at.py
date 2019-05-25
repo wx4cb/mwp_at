@@ -1,6 +1,7 @@
 #!/usr/bin/python
 
 # Simple python example for mwp dbus
+import threading
 import math
 import sys
 import dbus
@@ -226,13 +227,22 @@ def MWP_UpdateTracker():
     #print("Velocity: {}".format(posit_VELOCITY))
 
     # Send data to TrackerTTY
-    TrackerSerial.write("la: " + posit_UAV[ARRAYDEF_LAT] + "\n")
-    TrackerSerial.write("lo: " + posit_UAV[ARRAYDEF_LONG] + "\n")
-    TrackerSerial.write("az: " + azimuth + "\n")
-    TrackerSerial.write("be: " + bearing + "\n")
-    TrackerSerial.write("di: " + distance + "\n")
+    cmd  = "!UAV "
+    cmd += str(posit_UAV[ARRAYDEF_LAT])
+    cmd += " "
+    cmd += str(posit_UAV[ARRAYDEF_LONG])
+    cmd += " "
+    cmd += str(range)
+    cmd += " "
+    cmd += str(azimuth)
+    cmd += " "
+    cmd += str(bearing)
+    cmd += " "
+    cmd += "\r\n"
+    print("Sending: " + cmd)
+    TrackerSerial.write(cmd)
     TrackerSerial.flush()
-    
+
 def valmap(value, istart, istop, ostart, ostop):
   return ostart + (ostop - ostart) * ((value - istart) / (istop - istart))
 
@@ -254,7 +264,10 @@ def MWP_SignalSubscribe(mwp_obj):
     # Velocity Change - speed/course etc
     mwp_obj.connect_to_signal('VelocityChanged', VelocityChanged_handler)
 
-
+def read_from_port(ser):
+    while True:
+        reading = ser.readline().decode()
+        print(reading)
 # MAIN
 if __name__ == "__main__":
 
@@ -276,6 +289,7 @@ if __name__ == "__main__":
     # Create the maestro object and center channel
     try:
         TrackerSerial = serial.Serial(TrackerTTY, 115200, timeout=1)
+
     except:
         raise
         exit(1)
@@ -295,7 +309,6 @@ if __name__ == "__main__":
 
     except dbus.DBusException as e:
         print(str(e))
-        Maestro_obj.closeServo()
         sys.exit(255)
 
     # Get List of MWP Devices
@@ -307,4 +320,10 @@ if __name__ == "__main__":
     # Subscribe tos MWP_SignalSubscribe
     MWP_SignalSubscribe(mwp)
 
+    # Start Read Thread
+    #try:
+        #thread = threading.Thread(target=read_from_port, args=(TrackerSerial,))
+        #thread.start()
     MainLoop.run()
+    #except:
+        #thread.join()
