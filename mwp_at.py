@@ -9,10 +9,10 @@ import time
 import atexit
 import pyproj
 from gi.repository import GLib
+import serial
 
 from angles import normalize
 from measurement.measures import Distance
-from maestro import MaestroController
 
 # Global access to main loop
 MainLoop = GLib.MainLoop()
@@ -25,11 +25,8 @@ posit_STATE = 0     # Assume Disarmed
 posit_POLAR = None
 posit_VELOCITY = None
 
-# Maestro object
-Maestro_obj = None
-# Servo Number for PAN_SERVO
-PAN_SERVO = 0
-TILT_SERVO = 1
+# Tracker Serial Port object
+TrackerSerial = None
 
 def quit_handler(*args):
     global MainLoop
@@ -164,8 +161,7 @@ def MWP_InitTracker(mwp_obj):
     global posit_HOME
     global posit_UAV
     global posit_SATS
-    global Maestro_obj
-    global PAN_SERVO
+    global TrackerSerial
     global posit_STATE
     global posit_POLAR
     global posit_VELOCITY
@@ -188,8 +184,7 @@ def MWP_UpdateTracker():
     global posit_HOME
     global posit_UAV
     global posit_SATS
-    global Maestro_obj
-    global PAN_SERVO
+    global TrackerSerial
     global posit_POLAR
     global posit_VELOCITY
     global posit_STATE
@@ -230,10 +225,14 @@ def MWP_UpdateTracker():
     #print("Polar: {}".format(posit_POLAR))
     #print("Velocity: {}".format(posit_VELOCITY))
 
-    # Move Servos
-    Maestro_obj.setAngle(PAN_SERVO, bearing)
-    Maestro_obj.setAngle(TILT_SERVO, azimuth)
-
+    # Send data to TrackerTTY
+    TrackerSerial.write("la: " + posit_UAV[ARRAYDEF_LAT] + "\n")
+    TrackerSerial.write("lo: " + posit_UAV[ARRAYDEF_LONG] + "\n")
+    TrackerSerial.write("az: " + azimuth + "\n")
+    TrackerSerial.write("be: " + bearing + "\n")
+    TrackerSerial.write("di: " + distance + "\n")
+    TrackerSerial.flush()
+    
 def valmap(value, istart, istop, ostart, ostop):
   return ostart + (ostop - ostart) * ((value - istart) / (istop - istart))
 
@@ -256,41 +255,27 @@ def MWP_SignalSubscribe(mwp_obj):
     mwp_obj.connect_to_signal('VelocityChanged', VelocityChanged_handler)
 
 
-def MaestroCycleChannel(maestro, channel):
-    print("Cycling servo on channel {}".format(channel))
-    maestro.setAngle(channel, -90)
-    time.sleep(0.3)
-    maestro.setAngle(channel, 90)
-    time.sleep(0.3)
-    maestro.setAngle(channel, 0)
-
 # MAIN
 if __name__ == "__main__":
-    # Object for maestro controller
-    Maestro_obj = None
+
 
     # Check for serial ports on command line
-    # format: mwp_at.py <maestro tty port>
-    # Maestros expose 2 TTYs. usually ttyACM0 for the standard port
-    # and ttyACM1 for the TTL port We are only using the standard port (ttyACO0)
+    # format: mwp_at.py <tracker tty port>
     try:
         if len(sys.argv) < 2:
             print("Wrong amount of arguments: {}".format(len(sys.argv)))
             print("USAGE:")
-            print("{} <tty port for maestro controller - usually /dev/ttyACM0".format(sys.argv[0]))
+            print("{} <tty port for Antenna Tracker Controller - usually /dev/ttyACM0".format(sys.argv[0]))
             exit(1)
         else:
-            MaestroTTY = sys.argv[1]
-            print("Using {} for Maestro controller".format(MaestroTTY))
+            TrackerTTY = sys.argv[1]
+            print("Using {} for Tracker Controller".format(TrackerTTY))
     except:
         raise
 
     # Create the maestro object and center channel
     try:
-        Maestro_obj = MaestroController(MaestroTTY)
-        print("Centering all channels on {}".format(MaestroTTY))
-        MaestroCycleChannel(Maestro_obj, PAN_SERVO)
-        MaestroCycleChannel(Maestro_obj, TILT_SERVO)
+        TrackerSerial = serial.Serial(TrackerTTY, 115200, timeout=1)
     except:
         raise
         exit(1)
