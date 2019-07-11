@@ -1,0 +1,2 @@
+mwp --no-poll -d udp://:3000 -a
+./parseraw.rb -i -u 3000 ~/mwp_2019-07-08_073512.raw 2>&1 | ~/flight1.txt

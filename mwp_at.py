@@ -26,6 +26,8 @@ posit_STATE = 0     # Assume Disarmed
 posit_POLAR = None
 posit_VELOCITY = None
 
+__CMD_UAV__ = "!UAV:"
+
 # Tracker Serial Port object
 TrackerSerial = None
 
@@ -56,14 +58,19 @@ def home_handler(*args):
     global posit_HOME
     #print('sig home: ', args)
     posit_HOME = args
-    # Procees data
-    MWP_UpdateTracker()
+    # send the new home posit to the Tracker
+    homedata = args[0]
+    homedata += " "
+    homedata += args[1]
+    homedata += " "
+    homedata += args[2]
+    MWP_SendCommand("HOME", homedata)
 
-# Handler for number of sats chcanged
+# Handler for number of sats changed
 def SatsChanged_handler(*args):
     global posit_SATS
     posit_SATS = args
-    #print ("Satellites Changed: {:d} Sats - Fix Type: {:d}".format(posit_SATS[0], posit_SATS[1]))
+    print ("Satellites Changed: {:d} Sats - Fix Type: {:d}".format(posit_SATS[0], posit_SATS[1]))
 
 # Handler for UAV state change - eg arming
 def StateChanged_handler(*args):
@@ -75,7 +82,7 @@ def StateChanged_handler(*args):
 
 def PolarChanged_handler(*args):
     global posit_POLAR
-    print("Polar Changed: ", args)
+    print("Polar Changed: Range: {} Bearing: {} Azimuth: {}".format(args[0], args[1], args[2]))
     posit_POLAR = args
     # Procees data
     MWP_UpdateTracker()
@@ -132,7 +139,17 @@ def MWP_GetState(argument):
         13: "AUTOTUNE",
         14: "UNDEFINED"
     }
-    return(switcher.get(argument, "UNDEFINED"))
+    return(switcher.get(int(argument), "UNDEFINED"))
+
+def MWP_GetFixType(argument):
+    switcher = {
+        -1: "INVALID",
+        0: "NONE",
+        1: "2D",
+        2: "3D",
+        3: 'DGPS'
+    }
+    return(switcher.get(argument, "INVALID"))
 
 # Upload a mission to the FC
 def MWP_UploadMission(mwp_obj, filename):
@@ -181,6 +198,26 @@ def MWP_InitTracker(mwp_obj):
     print("Init Polar: {}".format(posit_POLAR))
     print("Init Velocity: {}".format(posit_POLAR))
 
+    # send the new home posit to the Tracker
+    homedata = str(posit_HOME[0])
+    homedata += " "
+    homedata += str(posit_HOME[1])
+    homedata += " "
+    homedata += str(posit_HOME[2])
+    MWP_SendCommand("HOME", homedata)
+
+def MWP_SendCommand(cmd, cmd_args):
+    output = None
+    output = "!"
+    output += cmd
+    output += ": "
+    output += cmd_args
+
+    print("Sending Command: {}".format(output))
+    TrackerSerial.write(output)
+    TrackerSerial.flush()
+
+
 def MWP_UpdateTracker():
     global posit_HOME
     global posit_UAV
@@ -189,6 +226,9 @@ def MWP_UpdateTracker():
     global posit_POLAR
     global posit_VELOCITY
     global posit_STATE
+
+    # Command constants
+    global __CMD_UAV__
 
     # Array Definitions
     ARRAYDEF_LAT=0
@@ -202,46 +242,60 @@ def MWP_UpdateTracker():
     ARRAYDEF_SATS=0
     ARRAYDEF_FIX=1
 
-    bearing = posit_POLAR[ARRAYDEF_BEARING]
+    bearing = posit_POLAR[ARRAYDEF_BEARING]-180
     azimuth = posit_POLAR[ARRAYDEF_AZIMUTH]
-    range = Distance(m=posit_POLAR[ARRAYDEF_RANGE]).ft
+
     homealt = Distance(m=posit_HOME[ARRAYDEF_ALT]).ft
     uavalt = Distance(m=posit_UAV[ARRAYDEF_ALT]).ft
+    range = Distance(m=posit_POLAR[ARRAYDEF_RANGE]).ft
 
-    bearing = 0 if bearing > 360 else bearing
-    azimuth = 0 if azimuth > 90 else azimuth
+    if bearing < 0:
+        bearing +=360
 
-    bearing = normalize(bearing, -90, 90, b=True)
-    azimuth = normalize(azimuth, -90, 90, b=True)
+    #azimuth = 0 if azimuth > 90 else azimuth
 
-    print("Home: {:+.4f} {:+.4f} ({:.0f} ft) - ".format(
-        posit_HOME[ARRAYDEF_LAT], posit_HOME[ARRAYDEF_LONG], homealt)),
-    print("UAV ({}): {:+.4f} {:+.4f} ({:.0f} ft) {:d} sats - ".format(
-        posit_STATE,posit_UAV[ARRAYDEF_LAT], posit_UAV[ARRAYDEF_LONG],
-        uavalt, posit_SATS[ARRAYDEF_SATS])),
-    print("Distance: {:.3f} ft - ".format(range)),
-    print("Elevation: {:.3f} deg - ".format(azimuth)),
-    print("Bearing: {:.3f} {:.3f}\r".format(bearing, posit_POLAR[ARRAYDEF_BEARING]))
-    #print("sats: {:.0f}".format(posit_SATS[ARRAYDEF_SATS]))
-    #print("Polar: {}".format(posit_POLAR))
-    #print("Velocity: {}".format(posit_VELOCITY))
+    #bearing = normalize(bearing, 0, 360, b=True)
+    #azimuth = normalize(azimuth, -90, 90, b=True)
+    # Sort out fixes and states
+    FixType = int(posit_SATS[ARRAYDEF_FIX])
+    #   print("UAVSTATE: {0}\n\n".format(posit_STATE))
+    if isinstance(posit_STATE, tuple):
+        UAVState = int(posit_STATE[0])
+    else:
+        UAVState = int(posit_STATE)
+
+    #print("Home: {:+.4f} {:+.4f}".format(
+    #    posit_HOME[ARRAYDEF_LAT],
+    #    posit_HOME[ARRAYDEF_LONG]))
+    print("UAV ({} {}): {:+.4f} {:+.4f} Alt: {} sats: {} - Distance: {} ft - Elevation: {} deg - Bearing: {} - Velocity: {:.2f} Course: {:.2f}".format(
+        MWP_GetFixType(FixType),
+        #int(posit_SATS[ARRAYDEF_FIX]),
+        MWP_GetState(int(UAVState)),
+        posit_UAV[ARRAYDEF_LAT],
+        posit_UAV[ARRAYDEF_LONG],
+        int(uavalt),
+        int(posit_SATS[ARRAYDEF_SATS]),
+        int(range),
+        azimuth,
+        bearing,
+        # Multiply m/s speed by 2.237 to get miles per hour
+        posit_VELOCITY[ARRAYDEF_SPEED]*2.237, posit_VELOCITY[ARRAYDEF_COURSE]))
 
     # Send data to TrackerTTY
-    cmd  = "!UAV "
-    cmd += str(posit_UAV[ARRAYDEF_LAT])
+    cmd = str(posit_UAV[ARRAYDEF_LAT])
     cmd += " "
     cmd += str(posit_UAV[ARRAYDEF_LONG])
-    cmd += " "
-    cmd += str(range)
-    cmd += " "
-    cmd += str(azimuth)
-    cmd += " "
-    cmd += str(bearing)
-    cmd += " "
-    cmd += "\r\n"
-    print("Sending: " + cmd)
-    TrackerSerial.write(cmd)
-    TrackerSerial.flush()
+    cmd += " R:"
+    cmd += str(int(range))
+    cmd += " V:"
+    cmd += str(posit_VELOCITY[ARRAYDEF_SPEED]*2.237)
+    cmd += " A:"
+    cmd += str(int(uavalt))
+    cmd += " B:"
+    cmd += str(int(bearing))
+    cmd += " Z:"
+    cmd += str(int(azimuth))
+    MWP_SendCommand("UAV", cmd)
 
 def valmap(value, istart, istop, ostart, ostop):
   return ostart + (ostop - ostart) * ((value - istart) / (istop - istart))
