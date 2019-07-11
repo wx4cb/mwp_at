@@ -9,6 +9,7 @@ import dbus.mainloop.glib
 import time
 import atexit
 import pyproj
+import threading
 from gi.repository import GLib
 import serial
 
@@ -18,6 +19,9 @@ from measurement.measures import Distance
 # Global access to main loop
 MainLoop = GLib.MainLoop()
 
+# Global access to MWP object
+mwp = None
+
 # GLobal data for posits etc
 posit_HOME = None
 posit_UAV = None
@@ -25,11 +29,14 @@ posit_SATS = None
 posit_STATE = 0     # Assume Disarmed
 posit_POLAR = None
 posit_VELOCITY = None
+posit_WAYPOINT = 0
 
 __CMD_UAV__ = "!UAV:"
+__CMD_HOME__ = "!HOME:"
 
 # Tracker Serial Port object
 TrackerSerial = None
+TrackerBaud = 9600
 
 def quit_handler(*args):
     global MainLoop
@@ -51,7 +58,7 @@ def loc_handler(*args):
     posit_UAV = args
 
     # Procees data
-    MWP_UpdateTracker()
+    #MWP_UpdateTracker()
 
 # Handler for Home posit
 def home_handler(*args):
@@ -59,18 +66,18 @@ def home_handler(*args):
     #print('sig home: ', args)
     posit_HOME = args
     # send the new home posit to the Tracker
-    homedata = args[0]
+    homedata = str(posit_HOME[0])
     homedata += " "
-    homedata += args[1]
+    homedata += str(posit_HOME[1])
     homedata += " "
-    homedata += args[2]
+    homedata += str(posit_HOME[2])
     MWP_SendCommand("HOME", homedata)
 
 # Handler for number of sats changed
 def SatsChanged_handler(*args):
     global posit_SATS
     posit_SATS = args
-    print ("Satellites Changed: {:d} Sats - Fix Type: {:d}".format(posit_SATS[0], posit_SATS[1]))
+    #print ("Satellites Changed: {:d} Sats - Fix Type: {:d}".format(posit_SATS[0], posit_SATS[1]))
 
 # Handler for UAV state change - eg arming
 def StateChanged_handler(*args):
@@ -78,20 +85,26 @@ def StateChanged_handler(*args):
     #print("State Changed: ", args)
     posit_STATE = args
     # Procees data
-    MWP_UpdateTracker()
+    #MWP_UpdateTracker()
 
 def PolarChanged_handler(*args):
     global posit_POLAR
-    print("Polar Changed: Range: {} Bearing: {} Azimuth: {}".format(args[0], args[1], args[2]))
+    #print("Polar Changed: Range: {} Bearing: {} Azimuth: {}".format(args[0], args[1], args[2]))
     posit_POLAR = args
     # Procees data
-    MWP_UpdateTracker()
+    #MWP_UpdateTracker()
 def VelocityChanged_handler(*args):
     global posit_VELOCITY
     #print("Velocity Changed: ", args)
     posit_VELOCITY = args
     # Procees data
-    MWP_UpdateTracker()
+    #MWP_UpdateTracker()
+
+def WaypointChanged_Handler(*args):
+    global posit_WAYPOINT
+    posit_WAYPOINT = args
+    print("WAYPOINT Changed: {}".format(posit_WAYPOINT))
+    #MWP_UpdateTracker()
 
 def MWP_GetDevices(mwp_obj):
     return mwp_obj.GetDevices()
@@ -120,8 +133,14 @@ def MWP_Connect(mwp_obj):
 
 # Get availabl states
 # Available states ["DISARMED", "MANUAL", "ACRO", "HORIZON", "ANGLE", "CRUISE", "RTH", "LAND", "WP", "HEADFREE", "POSHOLD", "ALTHOLD", "LAUNCH", "AUTOTUNE", "UNDEFINED"]
+#dbus.Array([dbus.String(u'DISARMED'), dbus.String(u'MANUAL'), dbus.String(u'ACRO'),
+#           dbus.String(u'HORIZON'), dbus.String(u'ANGLE'), dbus.String(u'CRUISE'), dbus.String(u'RTH'),
+#           dbus.String(u'LAND'), dbus.String(u'WP'), dbus.String(u'HEADFREE'), dbus.String(u'POSHOLD'),
+#           dbus.String(u'ALTHOLD'), dbus.String(u'LAUNCH'), dbus.String(u'AUTOTUNE'), dbus.String(u'UNDEFINED')],
+#           signature=dbus.Signature('s'))
+def MWP_GetState():
+    global mwp
 
-def MWP_GetState(argument):
     switcher = {
         0: "DISARMED",
         1: "MANUAL",
@@ -139,7 +158,7 @@ def MWP_GetState(argument):
         13: "AUTOTUNE",
         14: "UNDEFINED"
     }
-    return(switcher.get(int(argument), "UNDEFINED"))
+    return(switcher.get(mwp.GetState(), "UNDEFINED"))
 
 def MWP_GetFixType(argument):
     switcher = {
@@ -183,6 +202,7 @@ def MWP_InitTracker(mwp_obj):
     global posit_STATE
     global posit_POLAR
     global posit_VELOCITY
+    global posit_WAYPOINT
 
     # Fill with initial values
     posit_HOME = mwp_obj.GetHome()
@@ -191,12 +211,14 @@ def MWP_InitTracker(mwp_obj):
     posit_STATE = mwp_obj.GetState()
     posit_POLAR = mwp_obj.GetPolarCoordinates()
     posit_VELOCITY = mwp_obj.GetVelocity()
+    posit_WAYPOINT = mwp_obj.GetWaypointNumber()
 
     print("Init Home: {}".format(posit_HOME))
     print("Init Vehicle: {}".format(posit_UAV))
     print("Init Sats: {}".format(posit_SATS))
     print("Init Polar: {}".format(posit_POLAR))
     print("Init Velocity: {}".format(posit_POLAR))
+    print("Init Waypoint: {}".format(posit_WAYPOINT))
 
     # send the new home posit to the Tracker
     homedata = str(posit_HOME[0])
@@ -205,6 +227,10 @@ def MWP_InitTracker(mwp_obj):
     homedata += " "
     homedata += str(posit_HOME[2])
     MWP_SendCommand("HOME", homedata)
+
+    # Start Tracker timer - Inital Delay to allow arduino to reset
+    print("Starting Tracker Timer")
+    threading.Timer(10.0, MWP_UpdateTracker).start()
 
 def MWP_SendCommand(cmd, cmd_args):
     output = None
@@ -215,6 +241,7 @@ def MWP_SendCommand(cmd, cmd_args):
 
     print("Sending Command: {}".format(output))
     TrackerSerial.write(output)
+    TrackerSerial.write("\r\n")
     TrackerSerial.flush()
 
 
@@ -226,6 +253,7 @@ def MWP_UpdateTracker():
     global posit_POLAR
     global posit_VELOCITY
     global posit_STATE
+    global posit_WAYPOINT
 
     # Command constants
     global __CMD_UAV__
@@ -267,10 +295,11 @@ def MWP_UpdateTracker():
     #print("Home: {:+.4f} {:+.4f}".format(
     #    posit_HOME[ARRAYDEF_LAT],
     #    posit_HOME[ARRAYDEF_LONG]))
-    print("UAV ({} {}): {:+.4f} {:+.4f} Alt: {} sats: {} - Distance: {} ft - Elevation: {} deg - Bearing: {} - Velocity: {:.2f} Course: {:.2f}".format(
+    print("UAV ({} {} WP: {}): {:+.4f} {:+.4f} Alt: {} sats: {} - Distance: {} ft - Elevation: {} deg - Bearing: {} - Velocity: {:.2f} Course: {:.2f}".format(
         MWP_GetFixType(FixType),
         #int(posit_SATS[ARRAYDEF_FIX]),
-        MWP_GetState(int(UAVState)),
+        MWP_GetState(),
+        posit_WAYPOINT,
         posit_UAV[ARRAYDEF_LAT],
         posit_UAV[ARRAYDEF_LONG],
         int(uavalt),
@@ -285,17 +314,23 @@ def MWP_UpdateTracker():
     cmd = str(posit_UAV[ARRAYDEF_LAT])
     cmd += " "
     cmd += str(posit_UAV[ARRAYDEF_LONG])
-    cmd += " R:"
+    cmd += " "
     cmd += str(int(range))
-    cmd += " V:"
+    cmd += " "
     cmd += str(posit_VELOCITY[ARRAYDEF_SPEED]*2.237)
-    cmd += " A:"
+    cmd += " "
     cmd += str(int(uavalt))
-    cmd += " B:"
+    cmd += " "
     cmd += str(int(bearing))
-    cmd += " Z:"
+    cmd += " "
     cmd += str(int(azimuth))
+    cmd += " "
+    cmd += str(int(posit_WAYPOINT))
     MWP_SendCommand("UAV", cmd)
+
+    # Reset timer
+    threading.Timer(3.0, MWP_UpdateTracker).start()
+
 
 def valmap(value, istart, istop, ostart, ostop):
   return ostart + (ostop - ostart) * ((value - istart) / (istop - istart))
@@ -303,20 +338,30 @@ def valmap(value, istart, istop, ostart, ostop):
 # Connect to the signals we need for location data
 def MWP_SignalSubscribe(mwp_obj):
     print("Connecting to MWP DBUS Signals")
-    # Position of UAV chcanged
+    # Position of UAV changed
+    print ("LocationChanged")
     mwp_obj.connect_to_signal('LocationChanged', loc_handler)
     # Position of home changed
+    print("HomeChanged")
     mwp_obj.connect_to_signal('HomeChanged', home_handler)
     # Number of Satellites Changed
+    print("SatsChanged")
     mwp_obj.connect_to_signal('SatsChanged', SatsChanged_handler)
     # Arming/Mode State Change
+    print("StateChanged")
     mwp_obj.connect_to_signal('StateChanged', StateChanged_handler)
     # MWP Closed
+    print("quit")
     mwp_obj.connect_to_signal('Quit',quit_handler)
     # Polar Change - bearing etc
+    print("PolarChanged")
     mwp_obj.connect_to_signal('PolarChanged', PolarChanged_handler)
     # Velocity Change - speed/course etc
+    print("VelocityChanged")
     mwp_obj.connect_to_signal('VelocityChanged', VelocityChanged_handler)
+    # Waypoint Number changed
+    print("WaypointChanged")
+    mwp_obj.connect_to_signal('WaypointChanged', WaypointChanged_Handler)
 
 def read_from_port(ser):
     while True:
@@ -342,7 +387,7 @@ if __name__ == "__main__":
 
     # Create the maestro object and center channel
     try:
-        TrackerSerial = serial.Serial(TrackerTTY, 115200, timeout=1)
+        TrackerSerial = serial.Serial(TrackerTTY, TrackerBaud, timeout=1)
 
     except:
         raise
